@@ -34,8 +34,13 @@
 </head>
 <body>
     <div class="container">
-        <h1>Bienvenue sur notre site !</h1>
+        <h1> Sélectionnez un projet</h1>
         <p class="message">Vous êtes connecté en tant que <?= htmlspecialchars($_SESSION['user_email'] ?? 'Invité') ?>.</p>
+        <h1> Créer un projet</h1>
+        <div class="link">
+            <a href="creer_projet.php">Créer un projet</a>
+        </div>
+        </form>
         <div class="link">
             <?php if (isset($_SESSION['user_email'])): ?>
                 <a href="deconnexion.php">Se déconnecter</a>
@@ -44,4 +49,7 @@
                 <a href="inscription.php">S'inscrire</a>
             <?php endif; ?>
         </div>
+        
     </div>
+</body>
+</html>

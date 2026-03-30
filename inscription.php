@@ -78,7 +78,7 @@
         </form>
 
         <div class="message">
-            Vous avez déjà un compte ? <a href="connexion.html">Se connecter</a>
+            Vous avez déjà un compte ? <a href="connexion.php">Se connecter</a>
         </div>
     </div>
 </body>

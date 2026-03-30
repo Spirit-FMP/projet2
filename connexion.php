@@ -108,7 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </form>
 
         <div class="link">
-            <a href="connexion.php">Se connecter</a>
+            <a href="inscription.php">Créer un compte</a>
         </div>
     </div>
 </body>
