@@ -28,6 +28,7 @@
             display: inline-block; margin-top: 20px; padding: 10px 20px;
             background: #667eea; color: white; text-decoration: none;
             border-radius: 4px; font-size: 16px;
+            
         }
         .link a:hover { background: #764ba2; }
     </style>
@@ -35,7 +36,13 @@
 <body>
     <div class="container">
         <h1> Sélectionnez un projet</h1>
-        <p class="message">Vous êtes connecté en tant que <?= htmlspecialchars($_SESSION['user_email'] ?? 'Invité') ?>.</p>
+        <ul>
+            <div class="link"><a href="projet1.php">Projet 1</a></div>
+            <div class="link"><a href="projet2.php">Projet 2</a></div>
+            <div class="link"><a href="projet3.php">Projet 3</a></div>
+        </ul>
+        
+
         <h1> Créer un projet</h1>
         <div class="link">
             <a href="creer_projet.php">Créer un projet</a>

@@ -1101,6 +1101,36 @@ session_start();
             btn.innerHTML = '📄 Enregistrer en PDF';
             if (prevSelected) prevSelected.classList.add('selected');
         }
+
+        async function html2canvas(element, options) {
+            const btn = document.getElementById('btnEnr');
+            const pageE1 = document.getElementById('canvas');
+            const canvasImg = await html2canvas(pageEl, {
+                scale: 2,
+                useCORS: true,
+                backgroundColor: '#ffffff',
+                logging: false,
+                onclone: function(doc) {
+                    doc.querySelectorAll('.element-close, .resize-handle').forEach(el => {
+                        el.style.display = 'none';
+                    });
+                    doc.querySelectorAll('.element.behind').forEach(el => {
+                        el.style.display = 'none';
+                    });
+                }
+            });
+            const imgData = canvasImg.toDataURL('image/png');
+            html2canvas.addimage(imgData,'PNG', 0, 0, 210, 297);
+            
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+                script.onload = () => {
+                    window.html2canvas(element, options).then(resolve).catch(reject);
+                };
+                script.onerror = () => reject(new Error('Failed to load html2canvas library'));
+                document.head.appendChild(script);
+            });
     }
 </script>
 </body>
