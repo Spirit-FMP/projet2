@@ -1,5 +1,15 @@
 <?php
+
+$host = 'localhost';
+$dbname = 'projet_2';
+$user = 'root_copy';
+$password = 'Spirit-FMP';
+
 session_start();
+
+define('EC2_URL', 'http://13.38.245.13');  
+
+define('API_SECRET', 'MON_SECRET_12345');
 ?>
 <!DOCTYPE html>
 <html lang="fr">
@@ -12,7 +22,7 @@ session_start();
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
-        body { font-family: Arial, sans-serif; background-color: #667eea; padding: 20px; }
+        body { font-family: Arial, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #c0392b 50%, #e8826a 100%); min-height: 100vh; padding: 20px; }
 
         .top-bar {
             display: flex;
@@ -20,23 +30,47 @@ session_start();
             max-width: 1400px;
             margin: 0 auto 16px auto;
         }
-        .btn-pdf {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 22px;
-            background: #e53935;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 14px;
-            font-weight: bold;
-            cursor: pointer;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        .btn-pdf, .btn-save {
+            display: flex; align-items: center; gap: 8px;
+            padding: 10px 22px; color: white; border: none;
+            border-radius: 6px; font-size: 14px; font-weight: bold;
+            cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.25);
             transition: background 0.2s;
         }
+        .btn-pdf  { background: #e53935; }
         .btn-pdf:hover    { background: #b71c1c; }
         .btn-pdf:disabled { background: #aaa; cursor: not-allowed; }
+        .btn-save { background: #2e7d32; }
+        .btn-save:hover    { background: #1b5e20; }
+        .btn-save:disabled { background: #aaa; cursor: not-allowed; }
+
+        /* ── Modal sauvegarde ─────────────────────────── */
+        .save-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.5); z-index: 2000;
+            align-items: center; justify-content: center;
+        }
+        .save-overlay.open { display: flex; }
+        .save-popup {
+            background: white; border-radius: 12px; padding: 28px;
+            width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        }
+        .save-popup h3 { font-size: 17px; color: #333; margin-bottom: 16px; }
+        .save-popup input[type="text"] {
+            width: 100%; padding: 10px 12px; border: 1.5px solid #ccc;
+            border-radius: 6px; font-size: 14px; outline: none; margin-bottom: 14px;
+        }
+        .save-popup input[type="text"]:focus { border-color: #2e7d32; }
+        .save-popup-btns { display: flex; gap: 10px; }
+        .save-popup-btns button {
+            flex: 1; padding: 10px; border: none; border-radius: 6px;
+            font-size: 14px; cursor: pointer; font-weight: bold;
+        }
+        .btn-confirm-save { background: #2e7d32; color: white; }
+        .btn-confirm-save:hover { background: #1b5e20; }
+        .btn-cancel-save  { background: #eee; color: #555; }
+        .btn-cancel-save:hover { background: #ddd; }
+        .save-status { margin-top: 12px; font-size: 13px; text-align: center; min-height: 18px; }
 
         .container { display: flex; gap: 20px; max-width: 1400px; margin: 0 auto; }
 
@@ -346,7 +380,21 @@ session_start();
 </head>
 <body>
 <div class="top-bar">
-    <button class="btn-pdf" id="btnPdf" onclick="exportPDF()">📄 Enregistrer en PDF</button>
+    <button class="btn-save" id="btnSave" onclick="openSaveModal()">Sauvegarder</button>
+    <button class="btn-pdf"  id="btnPdf"  onclick="exportPDF()">Enregistrer en PDF</button>
+</div>
+
+<!-- Modal sauvegarde -->
+<div class="save-overlay" id="saveOverlay" onclick="closeSaveModalOnOverlay(event)">
+    <div class="save-popup">
+        <h3>Sauvegarder le projet</h3>
+        <input type="text" id="saveNom" placeholder="Nom du projet…" maxlength="80">
+        <div class="save-popup-btns">
+            <button class="btn-cancel-save"  onclick="closeSaveModal()">Annuler</button>
+            <button class="btn-confirm-save" id="btnConfirmSave" onclick="doSave()">Sauvegarder</button>
+        </div>
+        <div class="save-status" id="saveStatus"></div>
+    </div>
 </div>
 <div class="container">
 
@@ -584,8 +632,8 @@ session_start();
     }
 
     function addElementToCanvas(el) {
-        el.style.left = '50px';
-        el.style.top  = '50px';
+        if (!el.style.left) el.style.left = '50px';
+        if (!el.style.top)  el.style.top  = '50px';
         const btn = document.createElement('button');
         btn.className   = 'element-close';
         btn.textContent = '✕';
@@ -910,7 +958,6 @@ session_start();
         const fill   = selectedElement.dataset.fill;
         const stroke = selectedElement.dataset.stroke;
         const type   = selectedElement.dataset.shape;
-        // Replace SVG (keep close btn & handles)
         const closeBtn = selectedElement.querySelector('.element-close');
         const handles  = [...selectedElement.querySelectorAll('.resize-handle')];
         selectedElement.innerHTML = buildSVG(type, fill, stroke, sw, w, h);
@@ -1065,6 +1112,184 @@ session_start();
         updatePropsPanel(null);
     }
 
+  
+    const EC2_URL    = '<?= EC2_URL ?>';
+    const API_SECRET = '<?= API_SECRET ?>';
+    const USER_ID    = '<?= $_SESSION['user_id'] ?? '' ?>';
+
+
+    function serializeCanvas() {
+        const elements = [];
+        canvas.querySelectorAll('.element').forEach(el => {
+            const type = el.dataset.type;
+            const base = {
+                type,
+                left:   el.style.left,
+                top:    el.style.top,
+                width:  el.style.width,
+                height: el.style.height,
+            };
+            if (type === 'text') {
+                const ta = el.querySelector('textarea');
+                base.text       = ta ? ta.value : '';
+                base.fontSize   = ta ? ta.style.fontSize : '14px';
+                base.background = el.style.background || 'transparent';
+            } else if (type === 'shape') {
+                base.shape   = el.dataset.shape;
+                base.fill    = el.dataset.fill;
+                base.stroke  = el.dataset.stroke;
+                base.strokeW = el.dataset.strokeW;
+            } else if (type === 'image') {
+                const img = el.querySelector('img');
+                base.src     = img ? img.src : '';
+                base.clip    = el.dataset.clip || 'none';
+                base.opacity = el.style.opacity || '1';
+            }
+            elements.push(base);
+        });
+        return elements;
+    }
+
+
+    function deserializeCanvas(elements) {
+        canvas.innerHTML = '';
+        selectedElement = null;
+        updatePropsPanel(null);
+        elements.forEach(data => {
+            if (data.type === 'text') {
+                const el = document.createElement('div');
+                el.className = 'element';
+                el.dataset.type = 'text';
+                el.style.width      = data.width;
+                el.style.height     = data.height;
+                el.style.left       = data.left;
+                el.style.top        = data.top;
+                el.style.padding    = '6px';
+                el.style.background = data.background || 'transparent';
+                el.style.border     = 'none';
+                const ta = document.createElement('textarea');
+                ta.value = data.text || '';
+                ta.style.fontSize = data.fontSize || '14px';
+                el.appendChild(ta);
+                addElementToCanvas(el);
+            } else if (data.type === 'shape') {
+                const el = document.createElement('div');
+                el.className = 'element';
+                el.dataset.type    = 'shape';
+                el.dataset.shape   = data.shape;
+                el.dataset.fill    = data.fill;
+                el.dataset.stroke  = data.stroke;
+                el.dataset.strokeW = data.strokeW;
+                el.style.width  = data.width;
+                el.style.height = data.height;
+                el.style.left   = data.left;
+                el.style.top    = data.top;
+                el.style.border = 'none';
+                const w = parseInt(data.width), h = parseInt(data.height);
+                el.innerHTML = buildSVG(data.shape, data.fill, data.stroke, parseFloat(data.strokeW), w, h);
+                addElementToCanvas(el);
+            } else if (data.type === 'image') {
+                const el = document.createElement('div');
+                el.className = 'element';
+                el.dataset.type = 'image';
+                el.dataset.clip = data.clip || 'none';
+                el.style.width   = data.width;
+                el.style.height  = data.height;
+                el.style.left    = data.left;
+                el.style.top     = data.top;
+                el.style.opacity = data.opacity || '1';
+                el.style.padding = '0';
+                el.style.border  = 'none';
+                const img = document.createElement('img');
+                img.src = data.src;
+                img.style.cssText = 'width:100%;height:100%;display:block;object-fit:cover;';
+                if (data.clip && data.clip !== 'none') img.style.clipPath = getClipPath(data.clip);
+                el.appendChild(img);
+                addElementToCanvas(el);
+            }
+        });
+    }
+
+
+    (async function checkLoadProject() {
+        const params    = new URLSearchParams(window.location.search);
+        const nomProjet = params.get('projet');
+        if (!nomProjet) return;
+        document.getElementById('saveNom').value = decodeURIComponent(nomProjet);
+        try {
+            const res  = await fetch(EC2_URL + '/api_get.php?nom=' + encodeURIComponent(nomProjet) + '&user_id=' + encodeURIComponent(USER_ID));
+            const data = await res.json();
+            if (data.success && data.elements && data.elements.length > 0) {
+                deserializeCanvas(data.elements);
+            }
+        } catch(e) { console.warn('Impossible de charger le projet :', e); }
+    })();
+
+    function openSaveModal() {
+        document.getElementById('saveStatus').textContent = '';
+        const params = new URLSearchParams(window.location.search);
+        if (!params.get('projet')) document.getElementById('saveNom').value = '';
+        document.getElementById('saveOverlay').classList.add('open');
+        setTimeout(() => document.getElementById('saveNom').focus(), 100);
+    }
+    function closeSaveModal() {
+        document.getElementById('saveOverlay').classList.remove('open');
+    }
+    function closeSaveModalOnOverlay(e) {
+        if (e.target.id === 'saveOverlay') closeSaveModal();
+    }
+
+    async function doSave() {
+        const nom = document.getElementById('saveNom').value.trim();
+        const statusEl  = document.getElementById('saveStatus');
+        const confirmBtn = document.getElementById('btnConfirmSave');
+
+        if (!nom) { statusEl.style.color = '#c0392b'; statusEl.textContent = 'Veuillez saisir un nom.'; return; }
+
+        statusEl.style.color = '#555';
+        statusEl.textContent = '⏳ Capture en cours…';
+        confirmBtn.disabled  = true;
+
+        const prevSel = selectedElement;
+        if (selectedElement) selectedElement.classList.remove('selected');
+
+        try {
+            const pageEl    = document.getElementById('canvas');
+            const canvasImg = await html2canvas(pageEl, {
+                scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false,
+                onclone: doc => {
+                    doc.querySelectorAll('.element-close, .resize-handle').forEach(el => el.style.display = 'none');
+                    doc.querySelectorAll('.element.behind').forEach(el => el.style.display = 'none');
+                }
+            });
+            const imageB64 = canvasImg.toDataURL('image/png');
+            const elements = serializeCanvas();
+
+            statusEl.textContent = '📡 Envoi au serveur…';
+            const res  = await fetch(EC2_URL + '/api_save.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nom, image: imageB64, elements, user_id: USER_ID, secret: API_SECRET })
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                statusEl.style.color = '#2e7d32';
+                statusEl.textContent = '✅ Projet sauvegardé avec succès !';
+                history.replaceState(null, '', '?projet=' + encodeURIComponent(nom));
+                setTimeout(closeSaveModal, 1500);
+            } else {
+                throw new Error(data.error || 'Erreur inconnue');
+            }
+        } catch (err) {
+            statusEl.style.color = '#c0392b';
+            statusEl.textContent = 'Erreur : ' + err.message;
+        } finally {
+            confirmBtn.disabled = false;
+            if (prevSel) prevSel.classList.add('selected');
+        }
+    }
+
     async function exportPDF() {
         const btn = document.getElementById('btnPdf');
         btn.disabled = true;
@@ -1084,7 +1309,7 @@ session_start();
                     doc.querySelectorAll('.element-close, .resize-handle').forEach(el => {
                         el.style.display = 'none';
                     });
-                    // Elements that are behind (outside page) should not appear in PDF
+                
                     doc.querySelectorAll('.element.behind').forEach(el => {
                         el.style.display = 'none';
                     });
@@ -1102,35 +1327,6 @@ session_start();
             if (prevSelected) prevSelected.classList.add('selected');
         }
 
-        async function html2canvas(element, options) {
-            const btn = document.getElementById('btnEnr');
-            const pageE1 = document.getElementById('canvas');
-            const canvasImg = await html2canvas(pageEl, {
-                scale: 2,
-                useCORS: true,
-                backgroundColor: '#ffffff',
-                logging: false,
-                onclone: function(doc) {
-                    doc.querySelectorAll('.element-close, .resize-handle').forEach(el => {
-                        el.style.display = 'none';
-                    });
-                    doc.querySelectorAll('.element.behind').forEach(el => {
-                        el.style.display = 'none';
-                    });
-                }
-            });
-            const imgData = canvasImg.toDataURL('image/png');
-            html2canvas.addimage(imgData,'PNG', 0, 0, 210, 297);
-            
-            return new Promise((resolve, reject) => {
-                const script = document.createElement('script');
-                script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-                script.onload = () => {
-                    window.html2canvas(element, options).then(resolve).catch(reject);
-                };
-                script.onerror = () => reject(new Error('Failed to load html2canvas library'));
-                document.head.appendChild(script);
-            });
     }
 </script>
 </body>

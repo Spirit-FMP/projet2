@@ -54,7 +54,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             align-items: center;
             height: 100vh;
             margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #1a1a2e 0%, #c0392b 50%, #e8826a 100%);
         }
         .container {
             background: white;
