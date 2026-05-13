@@ -44,7 +44,7 @@ define('API_SECRET', 'MON_SECRET_12345');
         .btn-save:hover    { background: #1b5e20; }
         .btn-save:disabled { background: #aaa; cursor: not-allowed; }
 
-        /* ── Modal sauvegarde ─────────────────────────── */
+        /*Modal sauvegarde  */
         .save-overlay {
             display: none; position: fixed; inset: 0;
             background: rgba(0,0,0,0.5); z-index: 2000;
@@ -592,35 +592,50 @@ define('API_SECRET', 'MON_SECRET_12345');
 </div>
 
 <script>
-    const canvas         = document.getElementById('canvas');
-    const textProps      = document.getElementById('textProps');
-    const shapeProps     = document.getElementById('shapeProps');
-    const fontSizeRange  = document.getElementById('fontSizeRange');
-    const fontSizeNum    = document.getElementById('fontSizeNum');
-    const shapeWRange    = document.getElementById('shapeWRange');
-    const shapeWNum      = document.getElementById('shapeWNum');
-    const shapeHRange    = document.getElementById('shapeHRange');
-    const shapeHNum      = document.getElementById('shapeHNum');
-    const shapeFillColor = document.getElementById('shapeFillColor');
-    const shapeFillHex   = document.getElementById('shapeFillHex');
+
+    // ============================================================
+    // VARIABLES GLOBALES
+    // ============================================================
+    const canvas           = document.getElementById('canvas');
+    const textProps        = document.getElementById('textProps');
+    const shapeProps       = document.getElementById('shapeProps');
+    const fontSizeRange    = document.getElementById('fontSizeRange');
+    const fontSizeNum      = document.getElementById('fontSizeNum');
+    const shapeWRange      = document.getElementById('shapeWRange');
+    const shapeWNum        = document.getElementById('shapeWNum');
+    const shapeHRange      = document.getElementById('shapeHRange');
+    const shapeHNum        = document.getElementById('shapeHNum');
+    const shapeFillColor   = document.getElementById('shapeFillColor');
+    const shapeFillHex     = document.getElementById('shapeFillHex');
     const shapeStrokeColor = document.getElementById('shapeStrokeColor');
     const shapeStrokeHex   = document.getElementById('shapeStrokeHex');
-    const strokeWRange   = document.getElementById('strokeWRange');
-    const strokeWNum     = document.getElementById('strokeWNum');
-    const noFillChk      = document.getElementById('noFill');
-    const fillColorRow   = document.getElementById('fillColorRow');
-    const textTransparent = document.getElementById('textTransparent');
-    const textBgColorRow  = document.getElementById('textBgColorRow');
-    const textBgColor     = document.getElementById('textBgColor');
-    const imageProps      = document.getElementById('imageProps');
+    const strokeWRange     = document.getElementById('strokeWRange');
+    const strokeWNum       = document.getElementById('strokeWNum');
+    const noFillChk        = document.getElementById('noFill');
+    const fillColorRow     = document.getElementById('fillColorRow');
+    const textTransparent  = document.getElementById('textTransparent');
+    const textBgColorRow   = document.getElementById('textBgColorRow');
+    const textBgColor      = document.getElementById('textBgColor');
+    const imageProps       = document.getElementById('imageProps');
+
+    const EC2_URL    = '<?= EC2_URL ?>';
+    const API_SECRET = '<?= API_SECRET ?>';
+    const USER_ID    = '<?= $_SESSION['user_id'] ?? '' ?>';
 
     let selectedElement = null;
-    let isDragging = false;
-    let dragOffset = { x: 0, y: 0 };
-    let isResizing = false;
-    let resizeDir  = '';
-    let resizeStart = {};
+    let isDragging      = false;
+    let dragOffset      = { x: 0, y: 0 };
+    let isResizing      = false;
+    let resizeDir       = '';
+    let resizeStart     = {};
+    let pendingImageReplace = false;
 
+
+    // ============================================================
+    // CANVAS — sélection, drag & drop, redimensionnement
+    // ============================================================
+
+    // Crée les 8 poignées de redimensionnement (coins + milieux) et leur attache l'événement resize.
     function createHandles() {
         return ['nw','n','ne','e','se','s','sw','w'].map(dir => {
             const h = document.createElement('div');
@@ -631,6 +646,7 @@ define('API_SECRET', 'MON_SECRET_12345');
         });
     }
 
+    // Ajoute un élément sur le canvas avec son bouton de suppression, ses poignées et ses listeners drag/click.
     function addElementToCanvas(el) {
         if (!el.style.left) el.style.left = '50px';
         if (!el.style.top)  el.style.top  = '50px';
@@ -645,10 +661,135 @@ define('API_SECRET', 'MON_SECRET_12345');
         canvas.appendChild(el);
     }
 
+    // Sélectionne l'élément cliqué et met à jour le panneau de propriétés.
+    function selectElement(e) {
+        if (e.target.classList.contains('element-close') ||
+            e.target.classList.contains('resize-handle')) return;
+        if (selectedElement) selectedElement.classList.remove('selected');
+        selectedElement = e.currentTarget;
+        selectedElement.classList.add('selected');
+        updatePropsPanel(selectedElement);
+    }
+
+    // Désélectionne l'élément actif en cliquant sur le fond du canvas.
+    canvas.addEventListener('mousedown', function(e) {
+        if (e.target === canvas) {
+            if (selectedElement) {
+                selectedElement.classList.remove('selected');
+                selectedElement = null;
+                updatePropsPanel(null);
+            }
+        }
+    });
+
+    // Supprime l'élément du canvas et réinitialise la sélection et le panneau de propriétés.
+    function deleteElement(e) {
+        e.stopPropagation();
+        e.currentTarget.closest('.element').remove();
+        selectedElement = null;
+        updatePropsPanel(null);
+    }
+
+    // Démarre le déplacement d'un élément en mémorisant l'offset entre la souris et l'élément.
+    function startDrag(e) {
+        if (e.target.classList.contains('element-close') ||
+            e.target.classList.contains('resize-handle') ||
+            e.target.tagName === 'TEXTAREA') return;
+        isDragging = true;
+        selectElement(e);
+        const rect   = e.currentTarget.getBoundingClientRect();
+        dragOffset.x = e.clientX - rect.left;
+        dragOffset.y = e.clientY - rect.top;
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup',   stopDrag);
+        e.preventDefault();
+    }
+
+    // Déplace l'élément sélectionné en suivant la souris.
+    function drag(e) {
+        if (!isDragging || !selectedElement) return;
+        const cr = canvas.getBoundingClientRect();
+        let x = e.clientX - cr.left - dragOffset.x;
+        let y = e.clientY - cr.top  - dragOffset.y;
+        selectedElement.style.left = x + 'px';
+        selectedElement.style.top  = y + 'px';
+        updateZIndex(selectedElement, x, y, cr);
+    }
+
+    // Arrête le déplacement.
+    function stopDrag() {
+        isDragging = false;
+        document.removeEventListener('mousemove', drag);
+        document.removeEventListener('mouseup',   stopDrag);
+    }
+
+    // Place l'élément derrière le canvas s'il sort complètement de la zone de travail.
+    function updateZIndex(el, x, y, cr) {
+        if (!cr) { const r = canvas.getBoundingClientRect(); cr = { width: r.width, height: r.height }; }
+        const w  = el.offsetWidth  || 0;
+        const h  = el.offsetHeight || 0;
+        const outside = (x + w <= 0) || (y + h <= 0) || (x >= cr.width) || (y >= cr.height);
+        el.classList.toggle('behind', outside);
+    }
+
+    // Démarre le redimensionnement en capturant la direction de la poignée et l'état initial de l'élément.
+    function startResize(e) {
+        e.stopPropagation(); e.preventDefault();
+        isResizing = true;
+        resizeDir  = e.target.dataset.dir;
+        const el   = e.target.closest('.element');
+        selectElement({ currentTarget: el, target: e.target });
+        const cr = canvas.getBoundingClientRect();
+        resizeStart = {
+            mouseX: e.clientX, mouseY: e.clientY,
+            left:   parseInt(el.style.left) || 0,
+            top:    parseInt(el.style.top)  || 0,
+            width:  el.offsetWidth, height: el.offsetHeight,
+            cw: cr.width, ch: cr.height,
+        };
+        document.addEventListener('mousemove', doResize);
+        document.addEventListener('mouseup',   stopResize);
+    }
+
+    // Redimensionne l'élément en temps réel selon la direction de la poignée.
+    function doResize(e) {
+        if (!isResizing || !selectedElement) return;
+        const d = resizeDir, s = resizeStart;
+        const dx = e.clientX - s.mouseX, dy = e.clientY - s.mouseY;
+        const MW = 20, MH = 20;
+        let left = s.left, top = s.top, w = s.width, h = s.height;
+        if (d.includes('e')) w = Math.max(MW, s.width + dx);
+        if (d.includes('w')) { const nw=Math.max(MW,s.width-dx); left=s.left+s.width-nw; w=nw; }
+        if (d.includes('s')) h = Math.max(MH, s.height + dy);
+        if (d.includes('n')) { const nh=Math.max(MH,s.height-dy); top=s.top+s.height-nh; h=nh; }
+        selectedElement.style.left=left+'px'; selectedElement.style.top=top+'px';
+        selectedElement.style.width=w+'px';   selectedElement.style.height=h+'px';
+        updateZIndex(selectedElement, left, top);
+        if (selectedElement.dataset.type === 'shape') {
+            shapeWRange.value=w; shapeWNum.value=w;
+            shapeHRange.value=h; shapeHNum.value=h;
+            refreshSelectedShape();
+        } else if (selectedElement.dataset.type === 'image') {
+            document.getElementById('imgWRange').value=w; document.getElementById('imgWNum').value=w;
+            document.getElementById('imgHRange').value=h; document.getElementById('imgHNum').value=h;
+        }
+    }
+
+    // Arrête le redimensionnement.
+    function stopResize() {
+        isResizing = false;
+        document.removeEventListener('mousemove', doResize);
+        document.removeEventListener('mouseup',   stopResize);
+    }
+
+
+    // ============================================================
+    // FORMES SVG
+    // ============================================================
+
+    // Catalogue de toutes les formes disponibles avec leurs dimensions et leur SVG interne.
     const SHAPE_DEFS = {
         rectangle:     { w: 150, h: 100, hasFill: true,
-            svg: (f,s,sw) => `<rect x="${sw/2}" y="${sw/2}" width="calc(100% - ${sw}px)" height="calc(100% - ${sw}px)" rx="2" fill="${f}" stroke="${s}" stroke-width="${sw}"/>`,
-            viewBox: (w,h) => `0 0 ${w} ${h}`,
             shapes: (f,s,sw,w,h) => `<rect x="${sw/2}" y="${sw/2}" width="${w-sw}" height="${h-sw}" rx="2" fill="${f}" stroke="${s}" stroke-width="${sw}"/>` },
         square:        { w: 100, h: 100, hasFill: true,
             shapes: (f,s,sw,w,h) => `<rect x="${sw/2}" y="${sw/2}" width="${w-sw}" height="${h-sw}" rx="2" fill="${f}" stroke="${s}" stroke-width="${sw}"/>` },
@@ -683,6 +824,7 @@ define('API_SECRET', 'MON_SECRET_12345');
             shapes: (f,s,sw,w,h) => `<line x1="${sw}" y1="${h/2}" x2="${w-sw}" y2="${h/2}" stroke="${s}" stroke-width="${sw}" stroke-linecap="round"/>` },
     };
 
+    // Génère la balise SVG complète pour un type de forme donné avec ses couleurs et dimensions.
     function buildSVG(type, fill, stroke, strokeW, w, h) {
         const def = SHAPE_DEFS[type];
         if (!def) return '';
@@ -690,15 +832,130 @@ define('API_SECRET', 'MON_SECRET_12345');
         return `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" preserveAspectRatio="none">${inner}</svg>`;
     }
 
+    // Crée et ajoute une forme SVG du type choisi avec ses couleurs par défaut, puis ferme le popup.
+    function addShape(type) {
+        const def = SHAPE_DEFS[type];
+        if (!def) return;
+        const fill    = def.hasFill ? '#e7f3ff' : 'none';
+        const stroke  = '#0066cc';
+        const strokeW = 2;
+        const w = def.w, h = def.h;
+        const el = document.createElement('div');
+        el.className       = 'element';
+        el.dataset.type    = 'shape';
+        el.dataset.shape   = type;
+        el.dataset.fill    = fill;
+        el.dataset.stroke  = stroke;
+        el.dataset.strokeW = strokeW;
+        el.style.width     = w + 'px';
+        el.style.height    = h + 'px';
+        el.style.border    = 'none';
+        el.innerHTML       = buildSVG(type, fill, stroke, strokeW, w, h);
+        addElementToCanvas(el);
+        closeShapePopup();
+    }
+
+    // Reconstruit le SVG de la forme sélectionnée pour refléter les changements de couleur ou de taille.
+    function refreshSelectedShape() {
+        if (!selectedElement || selectedElement.dataset.type !== 'shape') return;
+        const w  = parseInt(selectedElement.style.width)  || 150;
+        const h  = parseInt(selectedElement.style.height) || 100;
+        const sw = parseFloat(selectedElement.dataset.strokeW) || 2;
+        const fill   = selectedElement.dataset.fill;
+        const stroke = selectedElement.dataset.stroke;
+        const type   = selectedElement.dataset.shape;
+        const closeBtn = selectedElement.querySelector('.element-close');
+        const handles  = [...selectedElement.querySelectorAll('.resize-handle')];
+        selectedElement.innerHTML = buildSVG(type, fill, stroke, sw, w, h);
+        if (closeBtn) selectedElement.appendChild(closeBtn);
+        handles.forEach(h => selectedElement.appendChild(h));
+    }
+
+    // Redimensionne la forme sélectionnée sur l'axe donné et rafraîchit son SVG.
+    function onShapeSizeChange(axis, val) {
+        let v = Math.min(600, Math.max(20, parseInt(val) || 20));
+        if (axis === 'w') { shapeWRange.value = v; shapeWNum.value = v; if (selectedElement) selectedElement.style.width  = v + 'px'; }
+        else              { shapeHRange.value = v; shapeHNum.value = v; if (selectedElement) selectedElement.style.height = v + 'px'; }
+        refreshSelectedShape();
+    }
+
+    // Applique les nouvelles couleurs de remplissage et de bordure à la forme sélectionnée.
+    function onShapeColorChange() {
+        if (!selectedElement || selectedElement.dataset.type !== 'shape') return;
+        const def = SHAPE_DEFS[selectedElement.dataset.shape];
+        if (def && def.hasFill && !noFillChk.checked) {
+            const f = shapeFillColor.value;
+            selectedElement.dataset.fill = f;
+            shapeFillHex.value = f;
+        }
+        const s = shapeStrokeColor.value;
+        selectedElement.dataset.stroke = s;
+        shapeStrokeHex.value = s;
+        refreshSelectedShape();
+    }
+
+    // Valide et applique une couleur saisie manuellement en hexadécimal pour le fill ou le stroke.
+    function onShapeHexChange(which, val) {
+        if (!/^#[0-9a-fA-F]{6}$/.test(val)) return;
+        if (which === 'fill') {
+            shapeFillColor.value = val;
+            if (selectedElement) selectedElement.dataset.fill = val;
+        } else {
+            shapeStrokeColor.value = val;
+            if (selectedElement) selectedElement.dataset.stroke = val;
+        }
+        refreshSelectedShape();
+    }
+
+    // Active ou désactive le remplissage transparent de la forme selon la case à cocher.
+    function onNoFillChange() {
+        if (!selectedElement || selectedElement.dataset.type !== 'shape') return;
+        if (noFillChk.checked) {
+            selectedElement.dataset.fill = 'none';
+            shapeFillColor.disabled = true;
+            shapeFillHex.disabled   = true;
+        } else {
+            const c = shapeFillColor.value;
+            selectedElement.dataset.fill = c;
+            shapeFillColor.disabled = false;
+            shapeFillHex.disabled   = false;
+        }
+        refreshSelectedShape();
+    }
+
+    // Modifie l'épaisseur de la bordure de la forme sélectionnée et rafraîchit son SVG.
+    function onStrokeWidthChange(val) {
+        let sw = Math.min(20, Math.max(0, parseInt(val) || 0));
+        strokeWRange.value = sw; strokeWNum.value = sw;
+        if (selectedElement) selectedElement.dataset.strokeW = sw;
+        refreshSelectedShape();
+    }
+
+    // Ouvre le popup de sélection de forme.
+    function openShapePopup()  { document.getElementById('shapeOverlay').classList.add('open'); }
+    // Ferme le popup de sélection de forme.
+    function closeShapePopup() { document.getElementById('shapeOverlay').classList.remove('open'); }
+    // Ferme le popup uniquement si le clic est sur l'overlay (fond sombre).
+    function closeShapePopupOnOverlay(e) { if (e.target.id === 'shapeOverlay') closeShapePopup(); }
+
+
+    // ============================================================
+    // TEXTE
+    // ============================================================
+
+    // Retourne le textarea contenu dans un élément texte, ou null si absent.
+    function getTextarea(el) { return el ? el.querySelector('textarea') : null; }
+
+    // Crée et ajoute une zone de texte éditable par défaut sur le canvas.
     function addTextBox() {
         const el = document.createElement('div');
-        el.className     = 'element';
-        el.dataset.type  = 'text';
-        el.style.width   = '180px';
-        el.style.height  = '80px';
-        el.style.padding = '6px';
+        el.className        = 'element';
+        el.dataset.type     = 'text';
+        el.style.width      = '180px';
+        el.style.height     = '80px';
+        el.style.padding    = '6px';
         el.style.background = 'transparent';
-        el.style.border  = 'none';
+        el.style.border     = 'none';
         const ta = document.createElement('textarea');
         ta.placeholder = 'Entrez du texte...';
         ta.value = 'Texte';
@@ -706,44 +963,56 @@ define('API_SECRET', 'MON_SECRET_12345');
         addElementToCanvas(el);
     }
 
-    function addShape(type) {
-        const def = SHAPE_DEFS[type];
-        if (!def) return;
-        const fill     = def.hasFill ? '#e7f3ff' : 'none';
-        const stroke   = '#0066cc';
-        const strokeW  = 2;
-        const w = def.w, h = def.h;
-
-        const el = document.createElement('div');
-        el.className    = 'element';
-        el.dataset.type = 'shape';
-        el.dataset.shape = type;
-        el.dataset.fill   = fill;
-        el.dataset.stroke = stroke;
-        el.dataset.strokeW = strokeW;
-        el.style.width  = w + 'px';
-        el.style.height = h + 'px';
-        el.style.border = 'none';
-        el.innerHTML    = buildSVG(type, fill, stroke, strokeW, w, h);
-
-        addElementToCanvas(el);
-        closeShapePopup();
+    // Applique la nouvelle taille de police au texte sélectionné et synchronise slider et champ numérique.
+    function onFontSizeChange(val) {
+        let size = Math.min(96, Math.max(8, parseInt(val) || 8));
+        fontSizeRange.value = size; fontSizeNum.value = size;
+        if (selectedElement && selectedElement.dataset.type === 'text') {
+            const ta = getTextarea(selectedElement);
+            if (ta) ta.style.fontSize = size + 'px';
+        }
     }
 
-    let pendingImageReplace = false;
+    // Bascule le fond du texte entre transparent et une couleur selon la case à cocher.
+    function onTextBgChange() {
+        if (!selectedElement || selectedElement.dataset.type !== 'text') return;
+        if (textTransparent.checked) {
+            selectedElement.style.background = 'transparent';
+            textBgColorRow.style.display = 'none';
+        } else {
+            const c = textBgColor.value;
+            selectedElement.style.background = c;
+            textBgColorRow.style.display = '';
+        }
+    }
 
+    // Met à jour la couleur de fond du texte sélectionné et synchronise le champ hex.
+    function onTextBgColorChange(val) {
+        if (!selectedElement || selectedElement.dataset.type !== 'text') return;
+        selectedElement.style.background = val;
+        document.getElementById('textBgHex').value = val;
+    }
+
+
+    // ============================================================
+    // IMAGES
+    // ============================================================
+
+    // Ouvre le sélecteur de fichier pour ajouter une nouvelle image sur le canvas.
     function triggerImageUpload() {
         pendingImageReplace = false;
         document.getElementById('imageFileInput').value = '';
         document.getElementById('imageFileInput').click();
     }
 
+    // Ouvre le sélecteur de fichier pour remplacer l'image de l'élément actuellement sélectionné.
     function triggerImageReplace() {
         pendingImageReplace = true;
         document.getElementById('imageFileInput').value = '';
         document.getElementById('imageFileInput').click();
     }
 
+    // Lit le fichier image sélectionné et soit remplace l'image existante, soit en crée une nouvelle.
     function onImageFileSelected(event) {
         const file = event.target.files[0];
         if (!file) return;
@@ -759,6 +1028,7 @@ define('API_SECRET', 'MON_SECRET_12345');
         reader.readAsDataURL(file);
     }
 
+    // Crée un élément image redimensionnable à partir d'une source base64 et l'ajoute au canvas.
     function createImageElement(src) {
         const el = document.createElement('div');
         el.className     = 'element';
@@ -775,7 +1045,8 @@ define('API_SECRET', 'MON_SECRET_12345');
         addElementToCanvas(el);
     }
 
-    function getClipPath(shape, w, h) {
+    // Retourne la valeur CSS clip-path correspondant à la forme de découpe demandée.
+    function getClipPath(shape) {
         switch(shape) {
             case 'circle':   return 'circle(50% at 50% 50%)';
             case 'ellipse':  return 'ellipse(50% 40% at 50% 50%)';
@@ -794,6 +1065,7 @@ define('API_SECRET', 'MON_SECRET_12345');
         }
     }
 
+    // Applique une forme de découpe (cercle, rectangle…) à l'image sélectionnée.
     function setImgClip(shape) {
         if (!selectedElement || selectedElement.dataset.type !== 'image') return;
         selectedElement.dataset.clip = shape;
@@ -807,34 +1079,36 @@ define('API_SECRET', 'MON_SECRET_12345');
         });
     }
 
+    // Met à jour la largeur ou la hauteur de l'image sélectionnée via le slider ou le champ numérique.
     function onImgSizeChange(axis, val) {
         let v = Math.min(800, Math.max(20, parseInt(val) || 20));
         if (axis === 'w') {
             document.getElementById('imgWRange').value = v;
-            document.getElementById('imgWNum').value = v;
+            document.getElementById('imgWNum').value   = v;
             if (selectedElement) selectedElement.style.width = v + 'px';
         } else {
             document.getElementById('imgHRange').value = v;
-            document.getElementById('imgHNum').value = v;
+            document.getElementById('imgHNum').value   = v;
             if (selectedElement) selectedElement.style.height = v + 'px';
         }
     }
 
+    // Modifie l'opacité de l'image sélectionnée en synchronisant slider et champ numérique.
     function onImgOpacityChange(val) {
         let v = Math.min(100, Math.max(0, parseInt(val) || 0));
         document.getElementById('imgOpacityRange').value = v;
-        document.getElementById('imgOpacityNum').value = v;
+        document.getElementById('imgOpacityNum').value   = v;
         if (selectedElement && selectedElement.dataset.type === 'image') {
             selectedElement.style.opacity = v / 100;
         }
     }
 
-    function openShapePopup()  { document.getElementById('shapeOverlay').classList.add('open'); }
-    function closeShapePopup() { document.getElementById('shapeOverlay').classList.remove('open'); }
-    function closeShapePopupOnOverlay(e) { if (e.target.id === 'shapeOverlay') closeShapePopup(); }
 
-    function getTextarea(el) { return el ? el.querySelector('textarea') : null; }
+    // ============================================================
+    // PANNEAU DE PROPRIÉTÉS
+    // ============================================================
 
+    // Affiche le panneau de propriétés adapté au type de l'élément sélectionné (texte, forme ou image).
     function updatePropsPanel(el) {
         textProps.classList.remove('visible');
         shapeProps.classList.remove('visible');
@@ -883,12 +1157,11 @@ define('API_SECRET', 'MON_SECRET_12345');
 
             shapeStrokeColor.value = stroke;
             shapeStrokeHex.value   = stroke;
-
             shapeProps.classList.add('visible');
 
-        } else if (el.dataset.type === 'image') {
-            const w = parseInt(el.style.width)  || 200;
-            const h = parseInt(el.style.height) || 150;
+        } else {
+            const w  = parseInt(el.style.width)  || 200;
+            const h  = parseInt(el.style.height) || 150;
             const op = Math.round((parseFloat(el.style.opacity) || 1) * 100);
             const clip = el.dataset.clip || 'none';
             document.getElementById('imgWRange').value = w;
@@ -904,220 +1177,12 @@ define('API_SECRET', 'MON_SECRET_12345');
         }
     }
 
-    function selectElement(e) {
-        if (e.target.classList.contains('element-close') ||
-            e.target.classList.contains('resize-handle')) return;
-        if (selectedElement) selectedElement.classList.remove('selected');
-        selectedElement = e.currentTarget;
-        selectedElement.classList.add('selected');
-        updatePropsPanel(selectedElement);
-    }
 
-    canvas.addEventListener('mousedown', function(e) {
-        if (e.target === canvas) {
-            if (selectedElement) {
-                selectedElement.classList.remove('selected');
-                selectedElement = null;
-                updatePropsPanel(null);
-            }
-        }
-    });
+    // ============================================================
+    // SAUVEGARDE & EXPORT
+    // ============================================================
 
-    function onFontSizeChange(val) {
-        let size = Math.min(96, Math.max(8, parseInt(val) || 8));
-        fontSizeRange.value = size; fontSizeNum.value = size;
-        if (selectedElement && selectedElement.dataset.type === 'text') {
-            const ta = getTextarea(selectedElement);
-            if (ta) ta.style.fontSize = size + 'px';
-        }
-    }
-
-    function onTextBgChange() {
-        if (!selectedElement || selectedElement.dataset.type !== 'text') return;
-        if (textTransparent.checked) {
-            selectedElement.style.background = 'transparent';
-            textBgColorRow.style.display = 'none';
-        } else {
-            const c = textBgColor.value;
-            selectedElement.style.background = c;
-            textBgColorRow.style.display = '';
-        }
-    }
-
-    function onTextBgColorChange(val) {
-        if (!selectedElement || selectedElement.dataset.type !== 'text') return;
-        selectedElement.style.background = val;
-        document.getElementById('textBgHex').value = val;
-    }
-
-    function refreshSelectedShape() {
-        if (!selectedElement || selectedElement.dataset.type !== 'shape') return;
-        const w  = parseInt(selectedElement.style.width)  || 150;
-        const h  = parseInt(selectedElement.style.height) || 100;
-        const sw = parseFloat(selectedElement.dataset.strokeW) || 2;
-        const fill   = selectedElement.dataset.fill;
-        const stroke = selectedElement.dataset.stroke;
-        const type   = selectedElement.dataset.shape;
-        const closeBtn = selectedElement.querySelector('.element-close');
-        const handles  = [...selectedElement.querySelectorAll('.resize-handle')];
-        selectedElement.innerHTML = buildSVG(type, fill, stroke, sw, w, h);
-        if (closeBtn) selectedElement.appendChild(closeBtn);
-        handles.forEach(h => selectedElement.appendChild(h));
-    }
-
-    function onShapeSizeChange(axis, val) {
-        let v = Math.min(600, Math.max(20, parseInt(val) || 20));
-        if (axis === 'w') { shapeWRange.value = v; shapeWNum.value = v; if (selectedElement) selectedElement.style.width  = v + 'px'; }
-        else              { shapeHRange.value = v; shapeHNum.value = v; if (selectedElement) selectedElement.style.height = v + 'px'; }
-        refreshSelectedShape();
-    }
-
-    function onShapeColorChange() {
-        if (!selectedElement || selectedElement.dataset.type !== 'shape') return;
-        const def = SHAPE_DEFS[selectedElement.dataset.shape];
-        if (def && def.hasFill && !noFillChk.checked) {
-            const f = shapeFillColor.value;
-            selectedElement.dataset.fill = f;
-            shapeFillHex.value = f;
-        }
-        const s = shapeStrokeColor.value;
-        selectedElement.dataset.stroke = s;
-        shapeStrokeHex.value = s;
-        refreshSelectedShape();
-    }
-
-    function onShapeHexChange(which, val) {
-        if (!/^#[0-9a-fA-F]{6}$/.test(val)) return;
-        if (which === 'fill') {
-            shapeFillColor.value = val;
-            if (selectedElement) selectedElement.dataset.fill = val;
-        } else {
-            shapeStrokeColor.value = val;
-            if (selectedElement) selectedElement.dataset.stroke = val;
-        }
-        refreshSelectedShape();
-    }
-
-    function onNoFillChange() {
-        if (!selectedElement || selectedElement.dataset.type !== 'shape') return;
-        if (noFillChk.checked) {
-            selectedElement.dataset.fill = 'none';
-            shapeFillColor.disabled = true;
-            shapeFillHex.disabled   = true;
-        } else {
-            const c = shapeFillColor.value;
-            selectedElement.dataset.fill = c;
-            shapeFillColor.disabled = false;
-            shapeFillHex.disabled   = false;
-        }
-        refreshSelectedShape();
-    }
-
-    function onStrokeWidthChange(val) {
-        let sw = Math.min(20, Math.max(0, parseInt(val) || 0));
-        strokeWRange.value = sw; strokeWNum.value = sw;
-        if (selectedElement) selectedElement.dataset.strokeW = sw;
-        refreshSelectedShape();
-    }
-
-    function startDrag(e) {
-        if (e.target.classList.contains('element-close') ||
-            e.target.classList.contains('resize-handle') ||
-            e.target.tagName === 'TEXTAREA') return;
-        isDragging = true;
-        selectElement(e);
-        const rect   = e.currentTarget.getBoundingClientRect();
-        dragOffset.x = e.clientX - rect.left;
-        dragOffset.y = e.clientY - rect.top;
-        document.addEventListener('mousemove', drag);
-        document.addEventListener('mouseup',   stopDrag);
-        e.preventDefault();
-    }
-
-    function drag(e) {
-        if (!isDragging || !selectedElement) return;
-        const cr = canvas.getBoundingClientRect();
-        let x = e.clientX - cr.left - dragOffset.x;
-        let y = e.clientY - cr.top  - dragOffset.y;
-        selectedElement.style.left = x + 'px';
-        selectedElement.style.top  = y + 'px';
-        updateZIndex(selectedElement, x, y, cr);
-    }
-
-    function updateZIndex(el, x, y, cr) {
-        if (!cr) { const r = canvas.getBoundingClientRect(); cr = { width: r.width, height: r.height }; }
-        const w  = el.offsetWidth  || 0;
-        const h  = el.offsetHeight || 0;
-        const outside = (x + w <= 0) || (y + h <= 0) || (x >= cr.width) || (y >= cr.height);
-        el.classList.toggle('behind', outside);
-    }
-
-    function stopDrag() {
-        isDragging = false;
-        document.removeEventListener('mousemove', drag);
-        document.removeEventListener('mouseup',   stopDrag);
-    }
-
-    function startResize(e) {
-        e.stopPropagation(); e.preventDefault();
-        isResizing = true;
-        resizeDir  = e.target.dataset.dir;
-        const el   = e.target.closest('.element');
-        selectElement({ currentTarget: el, target: e.target });
-        const cr = canvas.getBoundingClientRect();
-        resizeStart = {
-            mouseX: e.clientX, mouseY: e.clientY,
-            left:   parseInt(el.style.left) || 0,
-            top:    parseInt(el.style.top)  || 0,
-            width:  el.offsetWidth, height: el.offsetHeight,
-            cw: cr.width, ch: cr.height,
-        };
-        document.addEventListener('mousemove', doResize);
-        document.addEventListener('mouseup',   stopResize);
-    }
-
-    function doResize(e) {
-        if (!isResizing || !selectedElement) return;
-        const d = resizeDir, s = resizeStart;
-        const dx = e.clientX - s.mouseX, dy = e.clientY - s.mouseY;
-        const MW = 20, MH = 20;
-        let left = s.left, top = s.top, w = s.width, h = s.height;
-        if (d.includes('e')) w = Math.max(MW, s.width + dx);
-        if (d.includes('w')) { const nw=Math.max(MW,s.width-dx); left=s.left+s.width-nw; w=nw; }
-        if (d.includes('s')) h = Math.max(MH, s.height + dy);
-        if (d.includes('n')) { const nh=Math.max(MH,s.height-dy); top=s.top+s.height-nh; h=nh; }
-        selectedElement.style.left=left+'px'; selectedElement.style.top=top+'px';
-        selectedElement.style.width=w+'px';   selectedElement.style.height=h+'px';
-        updateZIndex(selectedElement, left, top);
-        if (selectedElement.dataset.type === 'shape') {
-            shapeWRange.value=w; shapeWNum.value=w;
-            shapeHRange.value=h; shapeHNum.value=h;
-            refreshSelectedShape();
-        } else if (selectedElement.dataset.type === 'image') {
-            document.getElementById('imgWRange').value=w; document.getElementById('imgWNum').value=w;
-            document.getElementById('imgHRange').value=h; document.getElementById('imgHNum').value=h;
-        }
-    }
-
-    function stopResize() {
-        isResizing = false;
-        document.removeEventListener('mousemove', doResize);
-        document.removeEventListener('mouseup',   stopResize);
-    }
-
-    function deleteElement(e) {
-        e.stopPropagation();
-        e.currentTarget.closest('.element').remove();
-        selectedElement = null;
-        updatePropsPanel(null);
-    }
-
-  
-    const EC2_URL    = '<?= EC2_URL ?>';
-    const API_SECRET = '<?= API_SECRET ?>';
-    const USER_ID    = '<?= $_SESSION['user_id'] ?? '' ?>';
-
-
+    // Sérialise tous les éléments du canvas en tableau JSON (type, position, taille, contenu).
     function serializeCanvas() {
         const elements = [];
         canvas.querySelectorAll('.element').forEach(el => {
@@ -1139,7 +1204,7 @@ define('API_SECRET', 'MON_SECRET_12345');
                 base.fill    = el.dataset.fill;
                 base.stroke  = el.dataset.stroke;
                 base.strokeW = el.dataset.strokeW;
-            } else if (type === 'image') {
+            } else {
                 const img = el.querySelector('img');
                 base.src     = img ? img.src : '';
                 base.clip    = el.dataset.clip || 'none';
@@ -1150,7 +1215,7 @@ define('API_SECRET', 'MON_SECRET_12345');
         return elements;
     }
 
-
+    // Reconstruit tous les éléments du canvas à partir des données JSON sauvegardées.
     function deserializeCanvas(elements) {
         canvas.innerHTML = '';
         selectedElement = null;
@@ -1158,8 +1223,8 @@ define('API_SECRET', 'MON_SECRET_12345');
         elements.forEach(data => {
             if (data.type === 'text') {
                 const el = document.createElement('div');
-                el.className = 'element';
-                el.dataset.type = 'text';
+                el.className        = 'element';
+                el.dataset.type     = 'text';
                 el.style.width      = data.width;
                 el.style.height     = data.height;
                 el.style.left       = data.left;
@@ -1174,7 +1239,7 @@ define('API_SECRET', 'MON_SECRET_12345');
                 addElementToCanvas(el);
             } else if (data.type === 'shape') {
                 const el = document.createElement('div');
-                el.className = 'element';
+                el.className       = 'element';
                 el.dataset.type    = 'shape';
                 el.dataset.shape   = data.shape;
                 el.dataset.fill    = data.fill;
@@ -1188,11 +1253,11 @@ define('API_SECRET', 'MON_SECRET_12345');
                 const w = parseInt(data.width), h = parseInt(data.height);
                 el.innerHTML = buildSVG(data.shape, data.fill, data.stroke, parseFloat(data.strokeW), w, h);
                 addElementToCanvas(el);
-            } else if (data.type === 'image') {
+            } else {
                 const el = document.createElement('div');
-                el.className = 'element';
-                el.dataset.type = 'image';
-                el.dataset.clip = data.clip || 'none';
+                el.className     = 'element';
+                el.dataset.type  = 'image';
+                el.dataset.clip  = data.clip || 'none';
                 el.style.width   = data.width;
                 el.style.height  = data.height;
                 el.style.left    = data.left;
@@ -1210,7 +1275,7 @@ define('API_SECRET', 'MON_SECRET_12345');
         });
     }
 
-
+    // Charge automatiquement un projet existant si un paramètre "projet" est présent dans l'URL.
     (async function checkLoadProject() {
         const params    = new URLSearchParams(window.location.search);
         const nomProjet = params.get('projet');
@@ -1225,6 +1290,7 @@ define('API_SECRET', 'MON_SECRET_12345');
         } catch(e) { console.warn('Impossible de charger le projet :', e); }
     })();
 
+    // Ouvre le modal de sauvegarde et pré-remplit le nom si le projet est déjà chargé depuis l'URL.
     function openSaveModal() {
         document.getElementById('saveStatus').textContent = '';
         const params = new URLSearchParams(window.location.search);
@@ -1232,22 +1298,27 @@ define('API_SECRET', 'MON_SECRET_12345');
         document.getElementById('saveOverlay').classList.add('open');
         setTimeout(() => document.getElementById('saveNom').focus(), 100);
     }
+
+    // Ferme le modal de sauvegarde.
     function closeSaveModal() {
         document.getElementById('saveOverlay').classList.remove('open');
     }
+
+    // Ferme le modal de sauvegarde uniquement si le clic est sur l'overlay (fond sombre).
     function closeSaveModalOnOverlay(e) {
         if (e.target.id === 'saveOverlay') closeSaveModal();
     }
 
+    // Capture le canvas en image PNG, sérialise les éléments, puis envoie tout à l'API de sauvegarde.
     async function doSave() {
-        const nom = document.getElementById('saveNom').value.trim();
-        const statusEl  = document.getElementById('saveStatus');
+        const nom        = document.getElementById('saveNom').value.trim();
+        const statusEl   = document.getElementById('saveStatus');
         const confirmBtn = document.getElementById('btnConfirmSave');
 
         if (!nom) { statusEl.style.color = '#c0392b'; statusEl.textContent = 'Veuillez saisir un nom.'; return; }
 
         statusEl.style.color = '#555';
-        statusEl.textContent = '⏳ Capture en cours…';
+        statusEl.textContent = 'Capture en cours…';
         confirmBtn.disabled  = true;
 
         const prevSel = selectedElement;
@@ -1265,7 +1336,7 @@ define('API_SECRET', 'MON_SECRET_12345');
             const imageB64 = canvasImg.toDataURL('image/png');
             const elements = serializeCanvas();
 
-            statusEl.textContent = '📡 Envoi au serveur…';
+            statusEl.textContent = 'Envoi au serveur…';
             const res  = await fetch(EC2_URL + '/api_save.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1275,7 +1346,7 @@ define('API_SECRET', 'MON_SECRET_12345');
 
             if (data.success) {
                 statusEl.style.color = '#2e7d32';
-                statusEl.textContent = '✅ Projet sauvegardé avec succès !';
+                statusEl.textContent = 'Projet sauvegardé avec succès !';
                 history.replaceState(null, '', '?projet=' + encodeURIComponent(nom));
                 setTimeout(closeSaveModal, 1500);
             } else {
@@ -1290,10 +1361,11 @@ define('API_SECRET', 'MON_SECRET_12345');
         }
     }
 
+    // Génère et télécharge un PDF A4 à partir d'une capture du canvas via html2canvas et jsPDF.
     async function exportPDF() {
         const btn = document.getElementById('btnPdf');
         btn.disabled = true;
-        btn.textContent = '⏳ Génération…';
+        btn.textContent = 'Génération…';
         const prevSelected = selectedElement;
         if (selectedElement) selectedElement.classList.remove('selected');
 
@@ -1301,18 +1373,10 @@ define('API_SECRET', 'MON_SECRET_12345');
             const { jsPDF } = window.jspdf;
             const pageEl = document.getElementById('canvas');
             const canvasImg = await html2canvas(pageEl, {
-                scale: 2,
-                useCORS: true,
-                backgroundColor: '#ffffff',
-                logging: false,
+                scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false,
                 onclone: function(doc) {
-                    doc.querySelectorAll('.element-close, .resize-handle').forEach(el => {
-                        el.style.display = 'none';
-                    });
-                
-                    doc.querySelectorAll('.element.behind').forEach(el => {
-                        el.style.display = 'none';
-                    });
+                    doc.querySelectorAll('.element-close, .resize-handle').forEach(el => el.style.display = 'none');
+                    doc.querySelectorAll('.element.behind').forEach(el => el.style.display = 'none');
                 }
             });
             const imgData = canvasImg.toDataURL('image/png');
@@ -1323,11 +1387,11 @@ define('API_SECRET', 'MON_SECRET_12345');
             alert('Erreur lors de la génération du PDF : ' + err.message);
         } finally {
             btn.disabled = false;
-            btn.innerHTML = '📄 Enregistrer en PDF';
+            btn.innerHTML = 'Enregistrer en PDF';
             if (prevSelected) prevSelected.classList.add('selected');
         }
-
     }
+
 </script>
 </body>
 </html>
